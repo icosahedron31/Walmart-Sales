@@ -179,3 +179,22 @@ class PatchTSTForecaster(BaseEstimator):
         out["Weekly_Sales"] = out["PatchTST"].fillna(0.0)   # test-only depts: no history
         out["Id"] = out["unique_id"] + "_" + out["ds"].dt.strftime("%Y-%m-%d")
         return out[["Id", "Weekly_Sales"]]
+    
+class FittedPatchTST(BaseEstimator):
+    """Already trained. fit() is a no-op; predict() forecasts from frozen history."""
+
+    def __init__(self, nf=None, history=None):
+        self.nf = nf
+        self.history = history
+
+    def fit(self, X, y=None):
+        return self                                  # nothing to do — already trained
+
+    def predict(self, X):
+        # X = pipeline output on test: unique_id, ds
+        P = self.nf.predict(df=self.history).reset_index()
+
+        out = X.merge(P, on=["unique_id", "ds"], how="left")
+        out["Weekly_Sales"] = out["PatchTST"].fillna(0.0)   # depts with no history
+        out["Id"] = out.unique_id + "_" + out.ds.dt.strftime("%Y-%m-%d")
+        return out[["Id", "Weekly_Sales"]]
