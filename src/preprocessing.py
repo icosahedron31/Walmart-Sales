@@ -134,3 +134,48 @@ class DropColumn(BaseEstimator, TransformerMixin):
         X.drop(columns=self.drop_cols, inplace=True)
 
         return X
+# ============ step 3: the forecaster (final estimator) ============
+from neuralforecast.losses.pytorch import MAE
+MAX_STEPS=10000
+SEED=42
+H = 35
+INPUT_SIZE=52
+FREQ = 'W-FRI'
+class PatchTSTForecaster(BaseEstimator):
+    """fit(): trains on the gap-filled panel and KEEPS it as history.
+       predict(): takes test keys, forecasts from that stored history, merges."""
+
+    def __init__(self, h=H, input_size=INPUT_SIZE, patch_len=8, stride=4,
+                 hidden_size=128, n_heads=8, encoder_layers=3, dropout=0.2,
+                 learning_rate=1e-3, max_steps=MAX_STEPS, freq=FREQ, seed=SEED):
+        self.h, self.input_size = h, input_size
+        self.patch_len, self.stride = patch_len, stride
+        self.hidden_size, self.n_heads = hidden_size, n_heads
+        self.encoder_layers, self.dropout = encoder_layers, dropout
+        self.learning_rate, self.max_steps = learning_rate, max_steps
+        self.freq, self.seed = freq, seed
+
+    def fit(self, X, y=None):
+        model = PatchTST(
+            h=self.h, input_size=self.input_size,
+            patch_len=self.patch_len, stride=self.stride,
+            hidden_size=self.hidden_size, n_heads=self.n_heads,
+            encoder_layers=self.encoder_layers, dropout=self.dropout,
+            revin=True,                  # instance norm — the core of the architecture
+            scaler_type="identity",      # revin already normalizes; don't stack them
+            loss=MAE(), learning_rate=self.learning_rate,
+            max_steps=self.max_steps, batch_size=256, random_seed=self.seed,
+        )
+        self.nf_ = NeuralForecast(models=[model], freq=self.freq)
+        self.nf_.fit(X, val_size=0)
+        self.history_ = X               # frozen. predict() never re-derives it.
+        return self
+
+    def predict(self, X):
+        # X = test keys, straight out of GapFiller's passthrough
+        P = self.nf_.predict(df=self.history_).reset_index()
+
+        out = X.merge(P, on=["unique_id", "ds"], how="left")
+        out["Weekly_Sales"] = out["PatchTST"].fillna(0.0)   # test-only depts: no history
+        out["Id"] = out["unique_id"] + "_" + out["ds"].dt.strftime("%Y-%m-%d")
+        return out[["Id", "Weekly_Sales"]]
